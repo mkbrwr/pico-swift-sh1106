@@ -1,4 +1,4 @@
-struct SH1106 {
+struct SH1106: ~Copyable {
     static let height = 64
     static let width = 128
     static let i2cAddr: UInt8 = 0x3C
@@ -64,51 +64,60 @@ struct SH1106 {
         sendCommandList(cmds)
     }
 
-    func sendCommandList(_ commands: [UInt8]) {
+    private func sendCommandList(_ commands: [UInt8]) {
         for command in commands {
             sendCommand(command)
         }
     }
 
-    func sendCommand(_ command: UInt8) {
+    private func sendCommand(_ command: UInt8) {
         var buf: (UInt8, UInt8) = (0x80, command)
         i2c_write_blocking(i2c, Self.i2cAddr, &buf, 2, false)
     }
 
-    func sendBuffer(_ buf: [UInt8]) {
-        var buf = [0x40] + buf
+    private func sendBuffer(_ buf: UnsafeBufferPointer<UInt8>) {
+        var buf = [UInt8(0x40)] + buf
         i2c_write_blocking(i2c, Self.i2cAddr, &buf, buf.count, false)
     }
 
-    func render(_ buf: [UInt8]) {
-        // SH1106 uses page addressing mode only
-        // We need to send each page separately with proper column addressing
-
-        let columnOffset = 2  // SH1106 column offset
+    func render(_ buf: consuming Span<UInt8>) {
+        let columnOffset = 2
 
         for page in 0..<numPages {
-            // Set page address
             sendCommand(Command.setPageAddr.rawValue | UInt8(page))
 
-            // Set column address (with offset for SH1106)
             let colStart = UInt8(columnOffset)
             sendCommand(Command.setLowerColAddr.rawValue | (colStart & 0x0F))
             sendCommand(Command.setHigherColAddr.rawValue | ((colStart >> 4) & 0x0F))
 
-            // Calculate the offset in the buffer for this page
             let pageOffset = page * Self.width
             let pageLen = Self.width
 
-            // Send the data for this page
-            let pageData = Array(buf[pageOffset..<pageOffset + pageLen])
-            sendBuffer(pageData)
+            buf.withUnsafeBufferPointer { buffer in
+                sendBuffer(buffer.extracting(pageOffset..<pageOffset + pageLen))
+            }
         }
     }
-    static func setPixel(buf: inout [UInt8], x: Int, y: Int, on: Bool) {
-        let bytesPerRow = Self.width
+}
 
+struct FrameBuffer: ~Copyable {
+    private let storage = UnsafeMutableRawBufferPointer.allocate(byteCount: 128 * 8, alignment: 8)
+
+    func draw(_ char: FontCharacter, at origin: (x: Int, y: Int)) {
+        storage[origin.y * 128 + origin.x + 0] = char.bitmap.0
+        storage[origin.y * 128 + origin.x + 1] = char.bitmap.1
+        storage[origin.y * 128 + origin.x + 2] = char.bitmap.2
+        storage[origin.y * 128 + origin.x + 3] = char.bitmap.3
+        storage[origin.y * 128 + origin.x + 4] = char.bitmap.4
+        storage[origin.y * 128 + origin.x + 5] = char.bitmap.5
+        storage[origin.y * 128 + origin.x + 6] = char.bitmap.6
+        storage[origin.y * 128 + origin.x + 7] = char.bitmap.7
+    }
+
+    func setPixel(x: Int, y: Int, on: Bool) {
+        let bytesPerRow = 128
         let byteIdx = (y / 8) * bytesPerRow + x
-        var byte = buf[byteIdx]
+        var byte = storage[byteIdx]
 
         if on {
             byte |= 1 << (y % 8)
@@ -116,7 +125,15 @@ struct SH1106 {
             byte &= ~(1 << (y % 8))
         }
 
-        buf[byteIdx] = byte
+        storage[byteIdx] = byte
+    }
+
+    func render(onto display: borrowing SH1106) {
+        storage.withMemoryRebound(
+            to: UInt8.self,
+            { buffer in
+                display.render(buffer.span)
+            })
     }
 }
 
@@ -132,16 +149,27 @@ struct Main {
         gpio_pull_up(UInt32(PICO_DEFAULT_I2C_SCL_PIN))
 
         let display = SH1106(&i2c)
-        while true {
-            var buffer = Array(repeating: UInt8(0), count: display.bufLen)
+        let buffer = FrameBuffer()
 
-            for y in 0..<SH1106.height {
-                for x in 0..<SH1106.width {
-                    SH1106.setPixel(buf: &buffer, x: x, y: y, on: true)
-                    display.render(buffer)
-                    sleep_ms(1)
-                }
+        for y in 0..<SH1106.height {
+            for x in 0..<SH1106.width {
+                buffer.setPixel(x: x, y: y, on: false)
             }
+        }
+        buffer.render(onto: display)
+        while true {
+            buffer.draw(.h, at: (0, 0))
+            buffer.draw(.e, at: (8, 0))
+            buffer.draw(.l, at: (16, 0))
+            buffer.draw(.l, at: (24, 0))
+            buffer.draw(.o, at: (32, 0))
+            buffer.draw(.w, at: (48, 0))
+            buffer.draw(.o, at: (56, 0))
+            buffer.draw(.r, at: (64, 0))
+            buffer.draw(.l, at: (72, 0))
+            buffer.draw(.d, at: (80, 0))
+            buffer.draw(.exclamation, at: (88, 0))
+            buffer.render(onto: display)
         }
     }
 }

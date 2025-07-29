@@ -8,6 +8,8 @@ project(swift-blinky)
 pico_sdk_init()
 enable_language(Swift)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS YES)
+
 set(CMAKE_Swift_COMPILER /Users/mkbrwr/.swiftly/bin/swiftc)
 set(SWIFT_TARGET "armv6m-none-none-eabi") # default for rp2040
 
@@ -28,6 +30,7 @@ add_executable(swift-blinky
     # Source files:
     Main.swift
     Support.swift
+    Font.swift
 )
 
 set_target_properties(swift-blinky PROPERTIES LINKER_LANGUAGE CXX)
