@@ -30,6 +30,8 @@ add_executable(swift-blinky
     # Source files:
     Main.swift
     Support.swift
+    I2C.swift
+    SH1106.swift
     Font.swift
 )
 
